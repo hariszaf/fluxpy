@@ -23,7 +23,6 @@ def _cmap():
     # Convert hexadecimal colors to RGBA format
     rgba_colors = [to_rgba(color) for color in hex_colors]
 
-
     cmap_name = "my_cmap"
     n_bins = 100
 
@@ -36,10 +35,14 @@ CMAP = _cmap()
 
 current_file_path = os.path.abspath(__file__)
 parent_folder = os.path.dirname(current_file_path)
-root_folder = os.path.dirname(parent_folder)
-EXT_DATA = os.path.join(root_folder, "ext_data")
-SEED2MNX = os.path.join(EXT_DATA, "seed2mnx.json")
-BIGG2MNX = os.path.join(EXT_DATA, "bigg2mnx.json")
+root_folder = os.path.dirname(parent_folder)  # this should point at src/
+print(root_folder)
+DATA = os.path.join(root_folder, "data")
+STYLES = os.path.join(DATA, "styles")
+
+
+SEED2MNX = os.path.join(STYLES, "seed2mnx.json")
+BIGG2MNX = os.path.join(STYLES, "bigg2mnx.json")  # currently, not available..
 
 BIGG_COFACTORS = ['atp_c0', 'atp_c', 'adp_c', 'adp_c0',
                   'atp_c0', 'atp_c', 'adp_c', 'adp_c0',
@@ -60,10 +63,9 @@ BIGG_COFACTORS = ['atp_c0', 'atp_c', 'adp_c', 'adp_c0',
                   'fadh2_c', 'fadh2_c0', 'fad_c', 'fad_c0',
                   'nh4_c', 'nh4_c0', 'nh4_e', 'nh4[e]',
                   'pyr_c0', 'pyr_c'
-                ]
+                  ]
 BIGG_BUILDING_BLOCLS = ['ala_L_c0', 'asp_L_c0', ' gln_L_c0', 'glu_L_c0', 'glu_L_c0', 'ser_L_c0', 'trp_L_c0', 'met_L_c0', 'lys_L_c0', 'cyst_L_c0',
-
-]
+                        ]
 
 # Based on 10.1093/gigascience/giy021
 MODELSEED_COFACTORS = [
@@ -109,6 +111,10 @@ MODELSEED_COFACTORS = [
     "cpd01775_c0"
 ]
 
-QFCA_STYLE = os.path.join(root_folder, "fluxpy/data/style_qfca.json")
+EXCLUDED_COMPOUNDS = BIGG_COFACTORS + MODELSEED_COFACTORS
 
-COMPLETE_MODEL = os.path.join(root_folder, "fluxpy/data/exchangeReactions.sbml")
+QFCA_STYLE = os.path.join(DATA, "style_qfca.json")
+COMPLETE_MODEL = os.path.join(DATA, "exchangeReactions.sbml")
+
+MSEED_COMPOUNDS = os.path.join(DATA, "MSEED_COMPOUNDS.json")
+# MSEED_REACTIONS = os.path.join()

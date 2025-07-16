@@ -8,7 +8,6 @@ from .utils import (
 
 from .format import convert_gbk_to_faa
 
-
 from .analysis import (
     get_nutrients_gradient,
     parse_qfca,
@@ -16,7 +15,8 @@ from .analysis import (
     # FBA
     producing_or_consuming_a_met,
     get_reactions_producing_a_met,
-    trace_path_with_backtracking_iterative
+    trace_path,
+    find_shortest_path_in_reaction_list
 )
 
 from .model import (

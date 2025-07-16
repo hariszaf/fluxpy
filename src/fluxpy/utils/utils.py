@@ -277,8 +277,6 @@ def _perform_recursive(in_met, reaction, model, visited_metabolites, cofactors, 
         )
 
 
-
-
 # %% Mapping metabolite and reaction terms
 
 def search_names_to_ontology(terms: List[str], all_terms: Union[Dict, str], threshold=0.90, classic=False):
@@ -433,8 +431,95 @@ def add_exchange_reactions_for(model: cobra.Model, signs: pd.DataFrame):
     return model
 
 
+def find_connected_components(graph):
+    # Define a function to find connected components using Depth-First Search (DFS)
 
+    # A set to keep track of visited nodes
+    visited = set()
+    # A list to store the connected components
+    components = []
 
+    # Helper function to perform a recursive DFS
+    def dfs(node, component):
+        # Mark the current node as visited
+        visited.add(node)
+        # Add the node to the current component
+        component.append(node)
+        # Visit all unvisited neighbors of the current node
+        for neighbor in graph[node]:
+            if neighbor not in visited:
+                dfs(neighbor, component)
 
+    # Iterate through all nodes in the graph
+    for node in graph:
+        # If the node has not been visited, it's the start of a new connected component
+        if node not in visited:
+            # Create a new component (list) to hold connected nodes
+            component = []
+            # Perform DFS starting from this node
+            dfs(node, component)
+            # Add the completed component to the list of components
+            components.append(component)
 
+    # Return the list of connected components
+    return components
+        
+
+def order_cofactors_by_abundance(sorted_counts_data, specific_reaction_cofactors):           
+    """
+    Function that takes the cofactors of a single reaction and sorts them 
+    based on their overall abundance in the model
+
+    Example input:
+    
+    sorted_counts_data = [('h_c', 35), ('h2o_c', 18), ('h_e', 17), ('atp_c', 13), 
+                        ('adp_c', 12), ('nad_c', 12), ('nadh_c', 12), ('pi_c', 12)]
+                        
+    specific_reaction_cofactors = ['h_e', 'h_c', 'adp_c', 'nadh_c']
+    
+    Example output:
+    
+    [35, 17, 12, 12]
+    """
+
+    # Convert the list of tuples to a dictionary for fast lookup
+    abundance_dict = dict(sorted_counts_data)
+    
+    # Sort the items based on their abundance in the dictionary
+    sorted_cofactors = sorted(specific_reaction_cofactors, key=lambda x: abundance_dict.get(x, 0), reverse=True)
+    sorted_abundances = [abundance_dict.get(item, 0) for item in sorted_cofactors]
+    
+    return sorted_abundances
+
+        
+def find_first_winning_sublist_with_losers(sublists):
+    """
+    Find the "winning" sublist and indices of non-winning sublists.
+    
+    Parameters:
+        sublists (list of lists): Input list of sublists to compare.
+
+    Returns:
+        tuple: (winning_sublist, losers_indices)
+
+    Example input:
+    
+    sublists = [
+        [9, 3, 5, 7],
+        [9, 3, 4, 6],
+        [0, 5, 3, 3],
+        [4, 2, 1, 6],
+        [7, 3, 2, 0]
+    ]
+    
+    Example output:
+    
+    [9, 3, 5, 7]
+    
+    """
+    
+    winning_sublist = max(sublists, key=lambda x: x)
+    losers_indices = [i for i, sublist in enumerate(sublists) if sublist != winning_sublist]
+    
+    return winning_sublist, losers_indices
 

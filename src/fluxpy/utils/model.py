@@ -7,7 +7,11 @@ from typing import List, Dict, Union
 from enum import Enum
 from mergem import merge
 from ..constants import *
-from .utils import _convert_list_to_binary, _convert_single_element_set
+from .utils import _convert_list_to_binary, _convert_single_element_set, order_cofactors_by_abundance, find_connected_components, find_first_winning_sublist_with_losers
+from cobra.io import load_json_model
+from collections import defaultdict
+from collections import Counter
+
 
 # %% Inner functions
 all_namespaces = ["chebi", "metacyc", "kegg", "reactome", "metanetx", "hmdb", "biocyc", "bigg", "seed", "sabiork", "rhea"]
@@ -418,7 +422,6 @@ def objective_reaction_name(model: cobra.Model):
     return model.reactions[obj_index].id, model.reactions[obj_index].name
 
 
-
 def fix_constraints_based_on_growth(model: cobra.Model, signs: pd.DataFrame):
     """
     Gets a model and a series of data frames or dictionaries as input to constrain the model based on growth data.
@@ -486,3 +489,205 @@ differences = {
     "absolute_difference": abs_diff[indices]
 }
 """
+
+class CofactorSpecificity:
+    
+    """
+    Class is used to identify cases where the same biochemical conversion is carried out by different cofactors in the model, 
+    while in reality the organism only uses one of the cofactors. If the cofactor specificity information is available,
+    the reaction with non-specific cofactor can be removed or turned off.
+    
+    This is how to initialize the class:
+    cofactor_specificity = CofactorSpecificity(cobra_model)
+    """
+    
+    def __init__(self, model):
+        
+        self.model = model
+
+
+    def find_reactants_products_cofactors(self):
+        
+        self.reactions_ids =  [ reaction.id for reaction in self.model.reactions ]
+        
+        self.reactants_list_all_reactions = []
+        self.products_list_all_reactions = []
+        self.cofactors_list_all_reactions = []
+        self.reversibility_list_all_reactions = []
+        
+        for reaction in self.reactions_ids:
+            reactants_list_single_reaction = []
+            products_list_single_reaction = []
+            cofactors_list_single_reaction = []
+
+            reaction_information = self.model.reactions.get_by_id(reaction)
+            
+            reactants = reaction_information.reactants
+            products = reaction_information.products
+            
+            reversibility = reaction_information.reversibility
+            self.reversibility_list_all_reactions.append(reversibility)
+            
+            for reactant in reactants:
+                reactant = str(reactant)
+                if reactant in BIGG_COFACTORS or reactant in BIGG_BUILDING_BLOCLS:
+                    cofactors_list_single_reaction.append(reactant)
+                else:
+                    reactants_list_single_reaction.append(reactant)
+                    
+            for product in products:
+                product = str(product)
+                if product in BIGG_COFACTORS or product in BIGG_BUILDING_BLOCLS:
+                    cofactors_list_single_reaction.append(product)
+                else:
+                    products_list_single_reaction.append(product)         
+                    
+            #print(reaction_information, reactants_list_single_reaction, products_list_single_reaction, cofactors_list_single_reaction, end ="\n")
+            self.reactants_list_all_reactions.append(reactants_list_single_reaction)
+            self.products_list_all_reactions.append(products_list_single_reaction)
+            self.cofactors_list_all_reactions.append(cofactors_list_single_reaction)
+
+
+    def find_reactions_combinations(self):
+        
+        self.find_reactants_products_cofactors()
+        
+        combinations = []
+        
+        for i in range(len(self.reactions_ids)):
+            for j in range(len(self.reactions_ids)):
+                
+                # avoid comparison of the same reaction
+                if self.reactions_ids[i] != self.reactions_ids[j]:
+
+                    # avoid comparison with empty lists
+                    if len(self.reactants_list_all_reactions[i]) > 0 and len(self.reactants_list_all_reactions[j]) > 0 and \
+                    len(self.products_list_all_reactions[i]) > 0 and len(self.products_list_all_reactions[j]) > 0:
+                    
+                        # boolean to check if pairwise reactants/products are the same
+                        identical_reactants = (set(self.reactants_list_all_reactions[i]) == set(self.reactants_list_all_reactions[j]))
+                        identical_products = (set(self.products_list_all_reactions[i]) == set(self.products_list_all_reactions[j]))
+                        identical_cofactors = (set(self.cofactors_list_all_reactions[i]) == set(self.cofactors_list_all_reactions[j]))
+
+                        if identical_reactants == True and identical_products == True and identical_cofactors == False:
+                            # finish here and keep combination
+                            combinations.append((self.reactions_ids[i], self.reactions_ids[j]))
+                        else:
+                            if self.reversibility_list_all_reactions[i] == True or self.reversibility_list_all_reactions[j] == True:
+                                # switch the reversibility of reaction i and compare updated reactants-products
+                                identical_reactants = (set(self.reactants_list_all_reactions[i]) == set(self.products_list_all_reactions[j]))
+                                identical_products = (set(self.products_list_all_reactions[i]) == set(self.reactants_list_all_reactions[j]))
+
+                                if identical_reactants == True and identical_products == True and identical_cofactors == False:
+                                    # finish here and keep combination
+                                    combinations.append((self.reactions_ids[i], self.reactions_ids[j]))
+
+        self.unique_combinations = {tuple(sorted(pair)) for pair in combinations}
+
+
+    def merge_connected_combinations(self):
+        
+        """
+        This function takes as input the pairwise combinations of reactions from above and
+        creates groups of reactions that are candidates for cofactor specificity. It uses a graph-based approach
+        to find connected components in the graph of reactions.
+        """
+        
+        self.find_reactions_combinations()
+        
+        # We'll use a defaultdict where each key is a node, and its value is a set of neighboring nodes
+        graph = defaultdict(set)
+
+        # Build the adjacency list by iterating through each pair in the input
+        for x, y in self.unique_combinations:
+            # Add y as a neighbor of x
+            graph[x].add(y)
+            # Add x as a neighbor of y (because the graph is undirected)
+            graph[y].add(x)
+
+        # At this point, for an input of this format: [('A', 'B'), ('A', 'C'), ('B', 'C'), ('D', 'K')]
+        # the `graph` looks like:
+        # {'A': {'B', 'C'}, 'B': {'A', 'C'}, 'C': {'A', 'B'}, 'D': {'K'}, 'K': {'D'}}
+
+        self.groups = find_connected_components(graph)
+
+        # At this point, `self.groups` will contain:
+        # [['A', 'B', 'C'], ['D', 'K']]
+        
+
+    def cofactors_abundance(self):
+        
+        self.merge_connected_combinations()
+                
+        # Count occurrences of each cofactor
+        flat_list = [item for sublist in self.cofactors_list_all_reactions for item in sublist]
+        element_counts = Counter(flat_list)  
+        self.sorted_counts = element_counts.most_common()
+        
+        
+    def remove_reactions(self):
+        
+        for knockout_index in self.knockout_indices_all:
+            knockout_reaction = self.reactions_ids[knockout_index]
+            self.model.reactions.get_by_id(knockout_reaction).lower_bound = 0
+            self.model.reactions.get_by_id(knockout_reaction).upper_bound = 0
+                
+        
+    def filter_reactions(self):
+        
+        self.cofactors_abundance()
+        self.knockout_indices_all = []
+        
+        for group in self.groups:
+            keep_indices_group = []
+            cofactors_count_min = float('+inf')
+                        
+            # find minimum number of cofactors across reactions of a single group
+            for reaction in group:
+                reaction_index = self.reactions_ids.index(reaction)   
+                reaction_cofactors = self.cofactors_list_all_reactions[reaction_index]
+                cofactors_count = len(reaction_cofactors)
+                
+                if cofactors_count < cofactors_count_min:
+                    cofactors_count_min = cofactors_count
+
+                #print(reaction, reaction_cofactors, cofactors_count, cofactors_count_min)
+                
+            # find which reactions match the minimum number of cofactors
+            for reaction in group:
+                # find the index from the reaction list (general)
+                reaction_index = self.reactions_ids.index(reaction)                   
+                reaction_cofactors = self.cofactors_list_all_reactions[reaction_index]
+                cofactors_count = len(reaction_cofactors)
+   
+                # equal to minimum value
+                if cofactors_count == cofactors_count_min:
+                    keep_indices_group.append(reaction_index)
+                    
+                # greater than minimum value ==> knockout
+                else:
+                    self.knockout_indices_all.append(reaction_index)
+
+            
+            # if 2 or more reactions match the minimum number of cofactors
+            if len(keep_indices_group) > 1:
+                # find which reaction has the most abundant cofactor (general abundance from the model) 
+                # if the most abundant cofactor appears in all reactions, then check the next most abundant cofactor
+
+                # apply the 'order_cofactors_by_abundance' function to reactions in the 'keep_indices' list
+                # of the current group. Add all sorted abundance of cofactors for each reactions in a list
+                # then call the 'find_first_winning_sublist_with_losers' and add indices of the loser sublists into a list
+                                    
+                sorted_abundance_all_reactions = [
+                order_cofactors_by_abundance(self.sorted_counts, self.cofactors_list_all_reactions[idx])
+                for idx in keep_indices_group ]
+                
+                _, losers_indices = find_first_winning_sublist_with_losers(sorted_abundance_all_reactions)
+                
+                for loser_index in losers_indices:
+                    reaction_general_index = self.reactions_ids.index(group[loser_index])
+                    self.knockout_indices_all.append(reaction_general_index)                            
+            
+        
+        self.remove_reactions()
+

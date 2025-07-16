@@ -1,9 +1,11 @@
 """ Functionalities to handle metabolic modeling analysis objects"""
-
+import json
 import numpy as np
 import pandas as pd
 import cobra
-from typing import Union, Optional
+from typing import Union, Optional, Dict, List
+from difflib import get_close_matches
+from Levenshtein import distance as levenshtein_distance
 from ..constants import *
 
 NestedDataFrameType = pd.DataFrame
@@ -273,3 +275,166 @@ def _perform_recursive(in_met, reaction, model, visited_metabolites, cofactors, 
             _visited_metabolites=visited_metabolites,
             _inner_reactions=inner_reactions
         )
+
+
+
+
+# %% Mapping metabolite and reaction terms
+
+def search_names_to_ontology(terms: List[str], all_terms: Union[Dict, str], threshold=0.90, classic=False):
+    """
+    Map a list of terms to a reference ontology using string similarity.
+
+    Parameters:
+        terms (List[str]): List of terms to map.
+        all_terms (Union[Dict, str]): Reference ontology as a dictionary or a path to a JSON file.
+        threshold (float): Similarity threshold for fuzzy matching (used in classic mode).
+        classic (bool): Whether to use `difflib` for fuzzy matching (default is False).
+
+    Returns:
+        Dict[str, str]: Mapping of input terms to the best matching reference term IDs.
+    """
+    # Load reference terms if provided as a file
+    if isinstance(all_terms, str):
+        try:
+            with open(all_terms, "r") as f:
+                all_terms = json.load(f)
+        except Exception as e:
+            raise ValueError("Provide a valid JSON file.") from e
+    elif not isinstance(all_terms, Dict):
+        raise TypeError("Provide reference terms as a dictionary or a valid JSON file.")
+
+    # Extract aliases from reference terms
+    alias = {k:v["alias"] for k,v in all_terms.items()}
+
+    mmap = {}
+
+    for term in terms:
+
+        if classic:
+            # Use difflib to find the best match
+            best_hit_terms = []
+            best_hit_ids = []
+            for ref in alias:
+                matches = get_close_matches(term, alias[ref], n=1, cutoff=threshold)
+                if len(matches) > 0:
+                    best_hit_terms.append(matches[0])
+                    best_hit_ids.append(ref)
+
+            if len(best_hit_terms) > 1:
+                flattened_list = best_hit_terms
+                best_hit_term = get_close_matches(term, flattened_list, n=1)[0]  # best_match[0]
+                best_hit_id = best_hit_ids[flattened_list.index(best_hit_term)]
+
+            elif len(best_hit_terms) == 1:
+                best_hit_term, best_hit_id = best_hit_terms[0], best_hit_ids[0]
+
+            else:
+                print("no match for term:", term)
+                best_hit_term, best_hit_id = None, None
+
+        else:
+            # Use Levenshtein distance to find the closest match
+            best_hit_id = None
+            best_hit_score = 100
+            for ref in alias:
+                for case in alias[ref]:
+                    lev_score = levenshtein_distance(term, case)
+                    if lev_score < best_hit_score:
+                        best_hit_score = lev_score
+                        best_hit_id = ref
+
+        mmap[term] = best_hit_id
+
+    return mmap
+
+
+# %% Integrating growth data
+
+def decide_compounds_being_produced_consumed(growth_data: pd.DataFrame):
+    """
+    Based on the first and last entry of a metabolite's concentration, decides if the metabolite is being
+    produced or consumed.
+
+    Usage:
+        hplc_data = pd.read_excel(growth_data_file, sheet_name="HPLC")
+        decide_compounds_being_produced_consumed(hplc_data)
+
+    """
+    decision = {}
+    for _, met in growth_data.iterrows():
+        t0, t1 = met.iloc[1], met.iloc[-1]
+        diff = t1 - t0
+        threshold = 0.1*t0
+
+        if diff > threshold:
+            decision[met["metabolite"]] = "produced"
+        elif diff < threshold:
+            decision[met["metabolite"]] = "consumed"
+        else:
+            decision[met["metabolite"]] = np.nan
+
+    decision_df = pd.DataFrame.from_dict(decision, orient='index', columns=['Status']).reset_index()
+    decision_df.columns = ['metabolite', 'sign']
+
+    return decision_df
+
+
+def add_exchange_reactions_for(model: cobra.Model, signs: pd.DataFrame):
+    """
+    signs:
+
+    metabolite	sign	modelseed_id
+	Glucose	consumed	cpd00027
+    """
+
+    with open(MSEED_COMPOUNDS, "r") as f:
+        all_mseed_metabolites = json.load(f)
+
+    for _, met in signs.iterrows():
+        try:
+            cpd = met["modelseed_id"]
+        except KeyError:
+            raise("Your signs data frame needs to include a `modelseed_id` column with the corresponding id.")
+
+        if met["sign"] == np.nan:
+            continue
+        compound_name = met["metabolite"]
+        try:
+            c0 = cpd + "_c0"
+            model.metabolites.get_by_id(c0)
+        except:
+            print(f"Metabolite {compound_name} ({c0}) is not present in the cytosol. it will be skipped")
+            continue
+
+        try:
+            e0 = cpd + "_e0"
+            model.metabolites.get_by_id(e0)
+        except KeyError:
+            print(f"We need to create the external metabolite for {e0}.")
+            met_annotation = all_mseed_metabolites[cpd]
+            e0_met = cobra.Metabolite(
+                e0,
+                formula = met_annotation["formula"],
+                charge = met_annotation["charge"],
+                compartment="e0",
+                name=met_annotation["name"]
+            )
+            model.add_metabolites(e0_met)
+
+        try:
+            ex = "EX_" + cpd + "_e0"
+            model.reactions.get_by_id(ex)
+        except:
+            print("we need to create an exchange reaction")
+            print(e0)
+            model.add_boundary(model.metabolites.get_by_id(e0), type="exchange")
+
+    return model
+
+
+
+
+
+
+

@@ -1,9 +1,12 @@
-
 import numpy as np
 import pandas as pd
 import math
+import cobra
+from collections import deque
 import networkx as nx
 from .utils import NestedDataFrameType
+from .model import _check_if_modelseed_model
+from ..constants import *
 
 def get_nutrients_gradient(model, nutrients=None, upper_bound=None, step=None) -> NestedDataFrameType:
     """
@@ -201,6 +204,68 @@ def samples_on_qfca(qfca_graph, samples):
         inertias.append(kmeans.inertia_)
 
 
+def make_samples_loopless(model, samples):
+    """
+    [TODO] THIS IS MOST LIKELY NOT GONNA WORK
+
+    Since most samplers do not sample on the loopless flux space, this function exploits the
+
+    Args:
+        model (cobra.Model)
+        samples (pd.DataFrame) : rows reaction, columns samples
+        opt_value (float): objective value
+
+    Returns:
+        loopless samples (pd.DataFrame)
+    """
+    def export_objective(model):
+        exp_dict = model.objective._get_expression().as_coefficients_dict()
+        # Loop through the keys in the defaultdict
+        for key, coefficient in exp_dict.items():
+            if coefficient == 1.0:
+                # Extract the reaction name from the key
+                # Assuming the reaction is represented as part of the key
+                reaction_str = str(key)
+                obj_reaction = reaction_str.split("<=")[1].strip()
+        return obj_reaction
+
+    obj = export_objective(model)
+
+    def loopless_solution_wrapper(v):
+        # Run loopless_solution with the model and current column (v)
+        fluxes_dic = {}
+        for x, y in zip(model.reactions, list(v)):
+            fluxes_dic[x.id] = y
+        return cobra.flux_analysis.loopless_solution(model, fluxes_dic, opt_value=0.8*fluxes_dic[obj])
+
+    # Apply the wrapper function to each column of the array
+    result = np.apply_along_axis(loopless_solution_wrapper, axis=0, arr=samples)
+    return result
+    samples.df()
+
+
+def get_diverse_fluxes(model, samples, threshold=0.5, reactions_percent=0.1):
+    """
+    Return a list with the reaction ids of the fluxes whose marginal has a standard diviation higher than a threshold.
+    Compare average to std and if std is higher than a threshold of the average return it.
+
+    Args:
+        model (cobra.Model)
+        samples (numpy.array)
+        threshold (float):  > 0 standard diviation
+
+    Returns:
+
+    """
+    rxns = []
+    for i, reaction in enumerate(samples):
+        avg = np.average(reaction)
+        std = np.std(reaction)
+        if std > threshold*avg:
+            rxns.append(model.reactions[i])
+    return rxns
+
+
 # %% Util functions: flux balance analysis
 def producing_or_consuming_a_met(model, reaction_id, metabolite_id):
     """
@@ -248,7 +313,7 @@ def get_reactions_producing_a_met(model, metabolite_id):
     return rxns
 
 
-def trace_path_with_backtracking_iterative(model, start_reaction_id, target_reaction_id, ignore_mets=None):
+def trace_path(model, start_reaction_id, target_reaction_id, ignore_mets=None):
     """
     Trace a path from the start reaction to the target reaction through reactants,
     using an iterative DFS approach, with backtracking when exchange reactions are encountered.
@@ -267,11 +332,17 @@ def trace_path_with_backtracking_iterative(model, start_reaction_id, target_reac
         """Check if a reaction is an exchange reaction."""
         return len(reaction.reactants) == 0 or len(reaction.products) == 0 or reaction.id.startswith("EX_")
 
+    if ignore_mets is None:
+        if _check_if_modelseed_model(model):
+            ignore_mets = MODELSEED_COFACTORS
+        else:
+            ignore_mets = BIGG_COFACTORS
+    print("Ignore mets:", ignore_mets)
     # Initialize structures for DFS
     visited_reactions = set()  # Tracks all reactions visited to prevent revisiting
     stack = [(model.reactions.get_by_id(start_reaction_id), [])]
 
-    valid_paths = []  # List to store valid paths that do not dead-end at exchange reactions
+    valid_paths = []
     dead_end_paths = set()  # Tracks reactions leading to dead-end exchange reactions
 
     keep_rxns = set()  # Final set of reactions in valid paths
@@ -298,7 +369,7 @@ def trace_path_with_backtracking_iterative(model, start_reaction_id, target_reac
         else:
             reactants = current_reaction.products
 
-        found_valid_branch = False  # Track if any valid branches are found from the current reaction
+        found_valid_branch = False  # NOTE! Track if any valid branches are found from the current reaction
         for metabolite in reactants:
 
             if metabolite.id in ignore_mets:
@@ -328,4 +399,73 @@ def trace_path_with_backtracking_iterative(model, start_reaction_id, target_reac
     keep_rxns.add(start_reaction_id)
     return keep_rxns
 
+
+def find_shortest_path_in_reaction_list(model, start_reaction_id, target_reaction_id, reactions_list):
+    """
+    Find the shortest path between two reactions in a given list of reactions using BFS.
+
+    Args:
+        model (cobra.Model): COBRApy model object.
+        start_reaction_id (str): The ID of the starting reaction.
+        target_reaction_id (str): The ID of the target reaction.
+        reactions_list (list of str): A list of reaction IDs to search within.
+
+    Returns:
+        path: The shortest path (list of reactions) from start_reaction_id to target_reaction_id.
+    """
+    def is_reaction_connected(r1, r2):
+        """Check if reaction r1 can lead to reaction r2 via a common metabolite."""
+        metabolites_r1 = set(r1.reactants + r1.products)  # Consider products of reaction r1
+        metabolites_r2 = set(r2.reactants + r2.products)  # Consider reactants of reaction r2
+        return not metabolites_r1.isdisjoint(metabolites_r2)
+
+    # Initialize structures
+    visited = set()
+    queue = deque([(start_reaction_id, [])])  # Queue stores (current_reaction, current_path)
+
+    # BFS loop
+    while queue:
+
+        current_reaction_id, path = queue.popleft()
+
+        # Add current reaction to visited set
+        visited.add(current_reaction_id)
+
+        # Check if target is reached
+        if current_reaction_id == target_reaction_id:
+            return path + [current_reaction_id]
+
+        current_reaction = model.reactions.get_by_id(current_reaction_id)
+
+        # Iterate through reactions in reactions_list to find connections
+        for next_reaction_id in reactions_list:
+            if next_reaction_id not in visited:
+                next_reaction = model.reactions.get_by_id(next_reaction_id)
+
+                # Check if current reaction can lead to next reaction
+                if is_reaction_connected(current_reaction, next_reaction):
+                    queue.append((next_reaction_id, path + [current_reaction_id]))
+
+    # If no path is found, return an empty list
+    return []
+
+
+def get_active_constraints(model, solution=None, threshold=0.001):
+
+    active_constraints = []
+
+    if solution is None:
+        solution = model.optimize()
+
+    solution = solution.to_frame()
+
+    for reaction in model.reactions:
+        reaction_flux = solution[solution.index == reaction.id]["fluxes"].item()
+        if reaction_flux != 0 and (abs(reaction_flux - reaction.lower_bound) < threshold  or
+                                   abs(reaction_flux - reaction.upper_bound) < threshold ):
+
+            active_constraints.append(reaction)
+
+
+    return active_constraints
 

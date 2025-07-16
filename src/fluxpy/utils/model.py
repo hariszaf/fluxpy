@@ -3,7 +3,7 @@
 import cobra
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Union, Literal
+from typing import List, Dict, Union
 from enum import Enum
 from mergem import merge
 from ..constants import *
@@ -263,9 +263,6 @@ class CompareModels:
         return shared_reactions.index
 
 
-
-
-
     # def compare_sublist(self, sublist):
 
     #     return 1
@@ -281,6 +278,10 @@ class CompareModels:
 
 
 # %% Util functions
+def _check_if_modelseed_model(model: cobra.Model):
+    return model.metabolites[0].id.startswith("cpd")
+
+
 def map_namespace_to_ModelSEEDDatabase(seed_compounds: List[str],
                                        path_to_modelSEEDDatabase: str,
                                        annotations_to_keep=['BiGG', 'BiGG1']):
@@ -375,7 +376,7 @@ def sync_with_medium(model: cobra.Model, medium: Dict):
     except:
         pass
     # Check if model is using ModelSEED ontology
-    if not _check_if_modelseed_model:
+    if not _check_if_modelseed_model(model):
         return "Currently, cobra.Model needs to use ModelSEED ontology."
     complete_model = cobra.io.read_sbml_model(COMPLETE_MODEL)
     rxns_to_add = set()
@@ -409,9 +410,79 @@ def sync_with_medium(model: cobra.Model, medium: Dict):
     return (model, suggested_medium)
 
 
-"""
-Inner routines
-"""
-def _check_if_modelseed_model(model: cobra.Model):
-    return model.metabolites[0].id.startswith("cpd")
+def objective_reaction_name(model: cobra.Model):
+    """
+    Returns the name and the id of the objective function
+    """
+    obj_index = [r.objective_coefficient for r in model.reactions].index(True)
+    return model.reactions[obj_index].id, model.reactions[obj_index].name
 
+
+
+def fix_constraints_based_on_growth(model: cobra.Model, signs: pd.DataFrame):
+    """
+    Gets a model and a series of data frames or dictionaries as input to constrain the model based on growth data.
+
+
+    [NOTE] check how different the solutions go if you fix an exchange reaction to something compared to if you just specify the boundary sign
+
+    sigs:
+        The `metabolite` column is optional. Also, modelseed_id column may refer to specific exchange reactions, e.g. EX_cpd00027_e0 or include the `_e0` suffix in case of metabolites.
+        metabolite	status	modelseed_id
+        Glucose	consumed	cpd00027
+
+    """
+
+    for _, row in signs.iterrows():
+
+        try:
+            cpd = row["modelseed_id"]
+        except KeyError:
+            raise("Your signs data frame needs to include a `modelseed_id` column with the corresponding id.")
+
+        if cpd.endswith("_e"):
+            cpd = cpd.replace("_e", "_e0")
+        if "_e0" not in cpd:
+            cpd += "_e0"
+        if "EX" not in cpd:
+            rxn = "EX_" + cpd
+        else:
+            rxn = cpd
+
+        try:
+            model.metabolites.get_by_id(cpd)
+        except:
+            print(f"Metabolite {cpd} is not present in the model. It will be skipped.")
+            continue
+
+        model_rxn = model.reactions.get_by_id(rxn)
+
+        if row["sign"] == "consumes":
+            model_rxn.bounds = model_rxn.lower_bound, 0
+
+        elif row["sign"] == "produces":
+            model_rxn.bounds = 0, model_rxn.upper_bound
+
+        else:
+            continue
+
+        return model
+
+
+
+
+"""
+loopless_S1 = cobra.flux_analysis.loopless_solution(cobra_model_banimalis, banimalis_10opt_s1)
+# Calculate the absolute differences
+abs_diff = np.abs(dingo_sample_loopless.fluxes - s1)
+
+# Find the indices where the difference is greater than 0.001
+indices = np.where(abs_diff > 0.001)
+
+# Get the corresponding values from both arrays
+differences = {
+    "dingo_sample_loopless.fluxes": dingo_sample_loopless.fluxes[indices],
+    "s1": s1[indices],
+    "absolute_difference": abs_diff[indices]
+}
+"""

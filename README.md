@@ -1,47 +1,30 @@
+# Utilities for metabolic modeling 
+
+`fluxpy` is a toolkit for simple but laborious tasks in metabolic modeling analysis. 
 
 
-## Dependencies 
-We use [`poetry`](https://python-poetry.org) to version dependencies and publish to [PyPi](https://pypi.org).
+## Install 
 
-Once you have `poetry`, you may initialize a new project by entering its root folder and running:
-```bash
-poetry init
+<!-- in the .toml file we keep the dependencies and that's it.  -->
+
+
+If you wish just to use `fluxpy`:
+
 ```
-Then you may add dependencies simple by running:
-```bash
-poetry add numpy
-```
-where `numpy` can be any dependency required. 
-
-Then, you may install the dependencies by:
-```bash
-poetry install
-```
-and build it :
-
-```bash
-poetry build
+pip install fluxpy
 ```
 
-Finally, once a new version is ready, one may release it on PyPi by running:
-```bash
-poetry publish
+----
+
+If you wish to contribute/develop, git clone this repo, fire a new branch, and after you add your changes, you may run: 
+
 ```
-Yet, credentials are required for the last step.
+python -m build
 
-
-### Notes on dependencies
-
-We need `seaborn` at least `0.13.0` otherwise annotation in heatmaps fails.
-
-```bash
-python -m pip install seaborn==0.13.0
+pip install .
 ```
 
-In case we need a `requirements.txt` file, we only have to run:
-```bash
-poetry export --without-hashes --format=requirements.txt > requirements.txt
-```
+You can then open a PR to ask your code to be merged on the library! 
 
 
 ## ReadTheDocs
@@ -49,7 +32,7 @@ poetry export --without-hashes --format=requirements.txt > requirements.txt
 To test whether the documentation builder will perform online as we would like to, we may run locally the following command:
 
 ```bash
-cd documentation_builder/
+cd docs/
 sphinx-build -b html -d _build/doctrees -D language=en . _build/html -v
 ```
 

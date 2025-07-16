@@ -1,7 +1,16 @@
 # Wrt to the installation
 build/
 dist/
+.vscode/
 *egg-info/
+
+logs/
+log.tsv
 
 __pycache__/
 _build/
+
+
+# Download ModelSEED 
+downloaded_compounds/
+downloaded_reactions/
